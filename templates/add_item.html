@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="row justify-content-center mt-4">
+  <div class="col-md-6">
+
+    <div class="card p-4 shadow-sm">
+      <h2 class="mb-3">Add New Inventory Item</h2>
+      <p class="text-muted">Fill in the details below to add a new item.</p>
+
+      {% if error %}
+        <div class="alert alert-danger">{{ error }}</div>
+      {% endif %}
+
+      <form method="post" action="{{ url_for('add_item') }}">
+        
+        <div class="mb-3">
+          <label class="form-label">Item Name</label>
+          <input type="text" name="name" class="form-control" required>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label">Category</label>
+          <input type="text" name="category_name" class="form-control" placeholder="Keyboard, Mouse, Monitor" required>
+        </div>
+
+        <div class="row">
+          <div class="col-md-6 mb-3">
+            <label class="form-label">Quantity</label>
+            <input type="number" name="quantity" class="form-control" value="0" min="0" required>
+          </div>
+
+          <div class="col-md-6 mb-3">
+            <label class="form-label">Price (₹)</label>
+            <input type="number" step="0.01" name="price" class="form-control" value="0" min="0" required>
+          </div>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label">Low Stock Threshold</label>
+          <input type="number" name="low_stock_threshold" class="form-control" value="5" min="0">
+        </div>
+
+        <div class="d-flex justify-content-between mt-4">
+          <a href="{{ url_for('admin_dashboard') }}" class="btn btn-secondary">Cancel</a>
+
+          <button type="submit" class="btn btn-primary">Save Item</button>
+        </div>
+
+      </form>
+    </div>
+
+  </div>
+</div>
+
+{% endblock %}

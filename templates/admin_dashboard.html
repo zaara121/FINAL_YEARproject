@@ -1,0 +1,181 @@
+{% extends 'base.html' %} 
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <div>
+    <h1>Admin Dashboard</h1>
+    <p class="text-muted">Manage inventory, view reports, and approve restock requests</p>
+  </div>
+  <div>
+    <a class="btn btn-primary me-2" href="{{ url_for('export_inventory_pdf') }}">
+      Download Inventory PDF
+    </a>
+  </div>
+</div>
+
+<div class="row mb-4">
+  <div class="col-md-3">
+    <div class="card p-3">
+      <div>Total Items</div>
+      <h2>{{ total_items }}</h2>
+      <div class="text-muted">{{ total_units }} units in stock</div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="card p-3">
+      <div>Low Stock Alerts</div>
+      <h2>{{ low_stock_alerts }}</h2>
+      <div class="text-muted">Requires attention</div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="card p-3">
+      <div>Total Transactions</div>
+      <h2>{{ total_transactions }}</h2>
+      <div class="text-muted">All time</div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="card p-3">
+      <div>Active Categories</div>
+      <h2>{{ categories }}</h2>
+      <div class="text-muted">Computers, Mouse, Keyboards, CPU</div>
+    </div>
+  </div>
+</div>
+
+<div class="card p-4">
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h3>Inventory Management</h3>
+    <!-- Add Item toggle button -->
+    <button type="button" id="showAddForm" class="btn btn-primary">
+      + Add Item
+    </button>
+  </div>
+
+  <!-- ADD ITEM FORM (hidden by default, toggled by button above) -->
+  <div id="addItemForm" class="border rounded p-3 mb-3 d-none">
+    <h5 class="mb-3">Add New Item</h5>
+    <form method="post" action="{{ url_for('add_item') }}">
+      <div class="row mb-3">
+        <div class="col-md-4">
+          <label class="form-label">Item Name</label>
+          <input type="text" name="name" class="form-control" required>
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Category</label>
+          <!-- simple text field; you can change to a dropdown if you store categories separately -->
+          <input type="text" name="category_name" class="form-control" required>
+        </div>
+        <div class="col-md-2">
+          <label class="form-label">Quantity</label>
+          <input type="number" name="quantity" class="form-control" value="0" min="0" required>
+        </div>
+        <div class="col-md-2">
+          <label class="form-label">Price</label>
+          <input type="number" step="0.01" name="price" class="form-control" value="0" min="0" required>
+        </div>
+      </div>
+
+      <div class="row mb-3">
+        <div class="col-md-3">
+          <label class="form-label">Low Stock Threshold</label>
+          <input type="number" name="low_stock_threshold" class="form-control" value="5" min="0" required>
+        </div>
+      </div>
+
+      <button type="submit" class="btn btn-success">
+        Save Item
+      </button>
+      <button type="button" id="cancelAddForm" class="btn btn-link">
+        Cancel
+      </button>
+    </form>
+  </div>
+
+  <div class="row mb-3">
+    <div class="col-md-9">
+      <input id="searchInput" class="form-control" placeholder="Search items...">
+    </div>
+    <div class="col-md-3">
+      <select id="categoryFilter" class="form-select">
+        <option value="all">All Categories</option>
+      </select>
+    </div>
+  </div>
+
+  <table class="table">
+    <thead>
+      <tr>
+        <th>Item Name</th>
+        <th>Category</th>
+        <th>Quantity</th>
+        <th>Price</th>
+        <th>Status</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+
+    <tbody id="itemsTable">
+      {% for r in items %}
+      <tr>
+        <td>{{ r.name }}</td>
+        <td>{{ r.category_name }}</td>
+        <td>{{ r.quantity }}</td>
+        <td>₹{{ "%.2f"|format(r.price) }}</td>
+
+        <td>
+          {% if r.quantity == 0 %}
+            <span class="badge bg-danger">Out of Stock</span>
+          {% elif r.quantity <= 5 %}
+            <span class="badge bg-primary">Low Stock</span>
+          {% else %}
+            <span class="badge bg-secondary">In Stock</span>
+          {% endif %}
+        </td>
+
+        <td>
+          <!-- EDIT BUTTON -->
+          <a href="{{ url_for('edit_item', item_id=r.id) }}"
+             class="btn btn-sm btn-outline-primary">
+             ✏️ Edit
+          </a>
+
+          <!-- DELETE BUTTON -->
+          <form method="post"
+                action="{{ url_for('delete_item', item_id=r.id) }}"
+                style="display:inline-block;"
+                onsubmit="return confirm('Are you sure you want to delete this item?');">
+            <button class="btn btn-sm btn-outline-danger">
+              🗑️ Delete
+            </button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+
+  </table>
+</div>
+
+<!-- Small inline script to toggle the Add Item form -->
+<script>
+  document.addEventListener('DOMContentLoaded', function () {
+    const btn = document.getElementById('showAddForm');
+    const form = document.getElementById('addItemForm');
+    const cancelBtn = document.getElementById('cancelAddForm');
+
+    if (btn && form) {
+      btn.addEventListener('click', function () {
+        form.classList.toggle('d-none');
+      });
+    }
+
+    if (cancelBtn && form) {
+      cancelBtn.addEventListener('click', function () {
+        form.classList.add('d-none');
+      });
+    }
+  });
+</script>
+{% endblock %}
+       

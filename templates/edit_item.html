@@ -1,0 +1,82 @@
+{% extends 'base.html' %}
+{% block content %}
+
+<div class="row justify-content-center">
+  <div class="col-md-6">
+
+    <div class="card p-4 shadow-sm rounded">
+      <h3 class="mb-3">Edit Item</h3>
+
+      <form method="post">
+
+        <!-- Item Name -->
+        <div class="mb-3">
+          <label class="form-label">Item Name</label>
+          <input type="text"
+                 name="name"
+                 class="form-control"
+                 value="{{ item.name }}"
+                 required>
+        </div>
+
+        <!-- Category -->
+        <div class="mb-3">
+          <label class="form-label">Category</label>
+          <input type="text"
+                 name="category_name"
+                 class="form-control"
+                 value="{{ item.category_name }}">
+        </div>
+
+        <!-- Quantity -->
+        <div class="mb-3">
+          <label class="form-label">Quantity</label>
+          <input type="number"
+                 name="quantity"
+                 class="form-control"
+                 value="{{ item.quantity }}"
+                 min="0"
+                 required>
+        </div>
+
+        <!-- Price -->
+        <div class="mb-3">
+          <label class="form-label">Price (₹)</label>
+          <input type="number"
+                 step="0.01"
+                 name="price"
+                 class="form-control"
+                 value="{{ item.price }}"
+                 min="0"
+                 required>
+        </div>
+
+        <!-- Low Stock Warning Level -->
+        <div class="mb-3">
+          <label class="form-label">Low Stock Threshold</label>
+          <input type="number"
+                 name="low_stock_threshold"
+                 class="form-control"
+                 value="{{ item.low_stock_threshold or 5 }}"
+                 min="0">
+        </div>
+
+        <!-- Buttons -->
+        <div class="d-flex justify-content-between mt-4">
+          <a href="{{ url_for('admin_dashboard') }}" class="btn btn-secondary">
+            Cancel
+          </a>
+
+          <button type="submit" class="btn btn-primary">
+            Save Changes
+          </button>
+        </div>
+
+      </form>
+
+    </div>
+
+  </div>
+</div>
+
+{% endblock %}

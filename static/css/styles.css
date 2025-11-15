@@ -1,0 +1,5 @@
+body { background: #f7f8fb; }
+.navbar-primary { background: #4777e6 !important; }
+.logo-box { display:inline-block; width:40px; height:40px; background:#3f6ee6; border-radius:10px; text-align:center; color:#fff; line-height:40px; }
+.card { border-radius: 12px; }
+.icon-large { font-size: 36px; }

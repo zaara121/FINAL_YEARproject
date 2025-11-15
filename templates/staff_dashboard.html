@@ -1,0 +1,118 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <div>
+    <h1>Staff Dashboard</h1>
+    <p class="text-muted">Check stock, record transactions, and request restocks</p>
+  </div>
+  <div>
+    <a class="btn btn-primary" href="#">Request Restock</a>
+  </div>
+</div>
+<div class="row mb-4">
+  <div class="col-md-3">
+    <div class="card p-3">
+      <div>Total Items</div>
+      <h2>{{ total_items }}</h2>
+      <div class="text-muted">{{ total_units }} units available</div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="card p-3">
+      <div>Low Stock Items</div>
+      <h2>{{ low_stock_items }}</h2>
+      <div class="text-muted">May need restock</div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="card p-3">
+      <div>Available Categories</div>
+      <h2>{{ categories }}</h2>
+      <div class="text-muted">Computers, Mouse, Keyboards, CPU</div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="card p-3">
+      <div>Quick Actions</div>
+      <h2>3</h2>
+      <div class="text-muted">Issue, Return, Request Restock</div>
+    </div>
+  </div>
+</div>
+<div class="row">
+  <div class="col-md-8">
+    <div class="card p-4 mb-4">
+      <h3>Inventory Management</h3>
+      <div class="row mb-3">
+        <div class="col-md-9"><input id="searchInput2" class="form-control" placeholder="Search items..."></div>
+        <div class="col-md-3"><select class="form-select"><option>All Categories</option></select></div>
+      </div>
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Item Name</th>
+            <th>Category</th>
+            <th>Quantity</th>
+            <th>Price</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in items %}
+          <tr>
+            <td>{{ r.name }}</td>
+            <td>{{ r.category_name }}</td>
+            <td>{{ r.quantity }}</td>
+            <td>₹{{ "%.2f"|format(r.price) }}</td>
+            <td>
+              {% if r.quantity == 0 %}
+                <span class="badge bg-danger">Out of Stock</span>
+              {% elif r.quantity <= 5 %}
+                <span class="badge bg-primary">Low Stock</span>
+              {% else %}
+                <span class="badge bg-secondary">In Stock</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="card p-4">
+      <h3>Record Transaction</h3>
+      <p class="text-muted">Issue or return inventory items</p>
+      <div class="mb-3">
+        <label class="form-label">Select Item</label>
+        <select id="txItem" class="form-select">
+          <option value="">Choose an item</option>
+          {% for r in items %}
+            <option value="{{ r.id }}">{{ r.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="mb-3">
+        <label class="form-label">Transaction Type</label>
+        <select id="txType" class="form-select">
+          <option value="issue">Issue Item</option>
+          <option value="return">Return Item</option>
+          <option value="restock_request">Request Restock</option>
+        </select>
+      </div>
+      <div class="mb-3 row">
+        <div class="col-5">
+          <label class="form-label">Quantity</label>
+          <input id="txQty" type="number" class="form-control" value="1">
+        </div>
+        <div class="col-7">
+          <label class="form-label">Recipient/User Name</label>
+          <input id="txRecipient" class="form-control" placeholder="Enter name">
+        </div>
+      </div>
+      <button id="recordTx" class="btn btn-primary w-100">Record Transaction</button>
+      <div id="txMsg" class="mt-2"></div>
+    </div>
+  </div>
+</div>
+{% endblock %}
