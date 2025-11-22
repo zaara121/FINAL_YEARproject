@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, session, jsonify, send_file 
+from flask import Flask, render_template, request, redirect, url_for, session, jsonify, send_file
 from config import Config
 from flask_pymongo import PyMongo
 from flask_bcrypt import Bcrypt
@@ -59,6 +59,7 @@ def login():
 
     return render_template("login.html")
 
+
 @app.route("/register", methods=["GET", "POST"])
 def register():
     if request.method == "POST":
@@ -78,25 +79,36 @@ def register():
         return redirect(url_for("login"))
     return render_template("register.html")
 
+
 @app.route("/logout")
 def logout():
     session.clear()
     return redirect(url_for("login"))
 
-# --- Dashboards ---
 @app.route("/admin")
 def admin_dashboard():
     if session.get("role") != "admin":
         return redirect(url_for("login"))
 
+    # All items
     items = list(mongo.db.items.find({}))
+
     total_items = len(items)
     total_units = sum(i.get("quantity", 0) for i in items)
-    low_stock_alerts = sum(1 for i in items if i.get("quantity", 0) <= i.get("low_stock_threshold", 5))
+    low_stock_alerts = sum(
+        1 for i in items if i.get("quantity", 0) <= i.get("low_stock_threshold", 5)
+    )
     total_transactions = mongo.db.transactions.count_documents({})
-    categories_set = set(i.get("category_name") for i in items)
+
+    # Categories from items (for count)
+    categories_set = set(i.get("category_name") for i in items if i.get("category_name"))
     categories = len(categories_set)
 
+    # 🔹 NEW: get distinct category names from categories collection for dropdowns
+    category_docs = list(mongo.db.categories.find({}))
+    category_names = [c.get("name") for c in category_docs]
+
+    # Build view items list
     view_items = []
     for it in items:
         view_items.append({
@@ -114,8 +126,10 @@ def admin_dashboard():
         low_stock_alerts=low_stock_alerts,
         total_transactions=total_transactions,
         categories=categories,
-        items=view_items
+        items=view_items,
+        category_names=category_names,   # 🔹 pass to template
     )
+
 
 @app.route("/staff")
 def staff_dashboard():
@@ -125,8 +139,10 @@ def staff_dashboard():
     items = list(mongo.db.items.find({}))
     total_items = len(items)
     total_units = sum(i.get("quantity", 0) for i in items)
-    low_stock_items = sum(1 for i in items if i.get("quantity", 0) <= i.get("low_stock_threshold", 5))
-    categories_set = set(i.get("category_name") for i in items)
+    low_stock_items = sum(
+        1 for i in items if i.get("quantity", 0) <= i.get("low_stock_threshold", 5)
+    )
+    categories_set = set(i.get("category_name") for i in items if i.get("category_name"))
     categories = len(categories_set)
     restock_requests = mongo.db.transactions.count_documents({"type": "restock_request"})
 
@@ -151,54 +167,80 @@ def staff_dashboard():
     )
 
 # --- ADD ITEM (Admin only) ---
-@app.route("/admin/items/add", methods=["POST"])
+@app.route("/admin/items/add", methods=["GET", "POST"])
 def add_item():
     if session.get("role") != "admin":
         return redirect(url_for("login"))
 
-    name = request.form.get("name", "").strip()
-    category_name = request.form.get("category_name", "").strip()
-    quantity_raw = request.form.get("quantity", "0")
-    price_raw = request.form.get("price", "0")
-    low_stock_raw = request.form.get("low_stock_threshold", "5")
+    if request.method == "POST":
+        # From text inputs
+        name = request.form.get("name", "").strip()
+        category_name = request.form.get("category_name", "").strip()
 
-    # Parse numbers safely
-    try:
-        quantity = int(quantity_raw)
-    except ValueError:
-        quantity = 0
+        # From dropdowns (existing items / categories)
+        existing_name = request.form.get("existing_name", "").strip()
+        existing_category_name = request.form.get("existing_category_name", "").strip()
 
-    try:
-        price = float(price_raw)
-    except ValueError:
-        price = 0.0
+        # Prefer dropdown values if provided and text field is empty
+        if existing_name and not name:
+            name = existing_name
+        if existing_category_name and not category_name:
+            category_name = existing_category_name
 
-    try:
-        low_stock_threshold = int(low_stock_raw)
-    except ValueError:
-        low_stock_threshold = 5
+        quantity_raw = request.form.get("quantity", "0")
+        price_raw = request.form.get("price", "0")
+        low_stock_raw = request.form.get("low_stock_threshold", "5")
 
-    # --- NEW: ensure category exists in categories collection ---
-    category_id = None
-    if category_name:
-        existing_cat = mongo.db.categories.find_one({"name": category_name})
-        if existing_cat:
-            category_id = existing_cat["_id"]
-        else:
-            res = mongo.db.categories.insert_one({"name": category_name})
-            category_id = res.inserted_id
+        # Parse numbers safely
+        try:
+            quantity = int(quantity_raw)
+        except ValueError:
+            quantity = 0
 
-    # Insert item into items collection
-    mongo.db.items.insert_one({
-        "name": name,
-        "category_name": category_name,
-        "category_id": category_id,   # reference to categories collection
-        "quantity": quantity,
-        "price": price,
-        "low_stock_threshold": low_stock_threshold,
-    })
+        try:
+            price = float(price_raw)
+        except ValueError:
+            price = 0.0
 
-    return redirect(url_for("admin_dashboard"))
+        try:
+            low_stock_threshold = int(low_stock_raw)
+        except ValueError:
+            low_stock_threshold = 5
+
+        # --- Ensure category exists in categories collection ---
+        category_id = None
+        if category_name:
+            existing_cat = mongo.db.categories.find_one({"name": category_name})
+            if existing_cat:
+                category_id = existing_cat["_id"]
+            else:
+                res = mongo.db.categories.insert_one({"name": category_name})
+                category_id = res.inserted_id
+
+        # Insert item into items collection
+        mongo.db.items.insert_one({
+            "name": name,
+            "category_name": category_name,
+            "category_id": category_id,   # reference to categories collection
+            "quantity": quantity,
+            "price": price,
+            "low_stock_threshold": low_stock_threshold,
+        })
+
+        return redirect(url_for("admin_dashboard"))
+
+    # GET: show add_item page with dropdowns populated
+    items = list(mongo.db.items.find({}))
+    item_names = sorted({i.get("name") for i in items if i.get("name")})
+
+    categories = list(mongo.db.categories.find({}))
+    category_names = sorted({c.get("name") for c in categories if c.get("name")})
+
+    return render_template(
+        "add_item.html",
+        item_names=item_names,
+        category_names=category_names
+    )
 
 # --- Edit item (Admin only) ---
 @app.route("/admin/items/<item_id>/edit", methods=["GET", "POST"])
@@ -260,7 +302,6 @@ def edit_item(item_id):
         return redirect(url_for("admin_dashboard"))
 
     # GET: show edit form
-    # NOTE: you should have templates/edit_item.html created
     return render_template("edit_item.html", item=item, item_id=item_id)
 
 # --- Delete item (Admin only) ---
@@ -275,7 +316,8 @@ def delete_item(item_id):
         return "Invalid item id", 400
 
     mongo.db.items.delete_one({"_id": oid})
-    # optionally: mongo.db.transactions.delete_many({"item_id": oid})
+    # optionally also remove its transactions:
+    # mongo.db.transactions.delete_many({"item_id": oid})
     return redirect(url_for("admin_dashboard"))
 
 # --- API ---
@@ -296,6 +338,7 @@ def api_items():
             "category": it.get("category_name", "")
         })
     return jsonify(data)
+
 
 @app.route("/api/transaction", methods=["POST"])
 def api_transaction():

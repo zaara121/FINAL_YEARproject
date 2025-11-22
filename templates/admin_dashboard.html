@@ -1,4 +1,4 @@
-{% extends 'base.html' %} 
+{% extends 'base.html' %}
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3">
   <div>
@@ -61,15 +61,30 @@
           <label class="form-label">Item Name</label>
           <input type="text" name="name" class="form-control" required>
         </div>
+
         <div class="col-md-4">
           <label class="form-label">Category</label>
-          <!-- simple text field; you can change to a dropdown if you store categories separately -->
-          <input type="text" name="category_name" class="form-control" required>
+          <!-- 🔹 Input with dropdown suggestions from existing categories -->
+          <input
+            type="text"
+            name="category_name"
+            class="form-control"
+            list="categoryOptions"
+            placeholder="Select or type category"
+            required
+          >
+          <datalist id="categoryOptions">
+            {% for cat in category_names %}
+              <option value="{{ cat }}"></option>
+            {% endfor %}
+          </datalist>
         </div>
+
         <div class="col-md-2">
           <label class="form-label">Quantity</label>
           <input type="number" name="quantity" class="form-control" value="0" min="0" required>
         </div>
+
         <div class="col-md-2">
           <label class="form-label">Price</label>
           <input type="number" step="0.01" name="price" class="form-control" value="0" min="0" required>
@@ -99,6 +114,9 @@
     <div class="col-md-3">
       <select id="categoryFilter" class="form-select">
         <option value="all">All Categories</option>
+        {% for cat in category_names %}
+          <option value="{{ cat }}">{{ cat }}</option>
+        {% endfor %}
       </select>
     </div>
   </div>
@@ -178,4 +196,3 @@
   });
 </script>
 {% endblock %}
-       
