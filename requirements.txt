@@ -3,3 +3,6 @@ Flask-Bcrypt==1.0.1
 Flask-PyMongo==2.3.0
 reportlab==4.4.4
 pymongo==4.4.0
+
+
+python-dotenv>=0.20.0

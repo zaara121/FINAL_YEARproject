@@ -40,9 +40,10 @@ items = [
 db.items.insert_many(items)
 
 # Seed users (plaintext passwords; app will hash on first login)
+# ONLY CHANGE: added "email"
 users = [
-    {"username": "admin", "password": "password", "role": "admin"},
-    {"username": "staff", "password": "password", "role": "staff"},
+    {"username": "admin", "password": "password", "role": "admin", "email": "admin@example.com"},
+    {"username": "staff", "password": "password", "role": "staff", "email": "staff@example.com"},
 ]
 db.users.insert_many(users)
 
