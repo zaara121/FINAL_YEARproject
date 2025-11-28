@@ -34,30 +34,33 @@ app.config.from_object(Config)
 mongo = PyMongo(app)
 bcrypt = Bcrypt(app)
 
-# Safe idempotency index creation
 try:
-    # Remove explicit null idempotency_key (these break unique indexes)
+    
     mongo.db.transactions.update_many(
         {"idempotency_key": None},
         {"$unset": {"idempotency_key": ""}}
     )
 
-    # Unique index only when idempotency_key exists and is not null
     mongo.db.transactions.create_index(
         [("user_id", 1), ("idempotency_key", 1)],
         unique=True,
         name="user_id_idempotency_key_unique",
-        partialFilterExpression={"idempotency_key": {"$exists": True, "$ne": None}}
+        partialFilterExpression={"idempotency_key": {"$exists": True}}
     )
+
 except Exception:
+    # non-fatal; log and continue
     app.logger.exception("Could not create idempotency index on transactions (non-fatal)")
 
 
-# Email helper (OTP / reset)
-def send_email(to_email: str, subject: str, body: str):
-    """Send email via SMTP configured in app.config or print link/OTP to stdout for dev."""
+def send_email(to_email: str, subject: str, body: str) -> bool:
+    """
+    Send an email using SMTP config in app.config.
+    Returns True on success, False on failure.
+    Falls back to printing to console when SMTP isn't configured.
+    """
     smtp_server = app.config.get("SMTP_SERVER")
-    smtp_port = int(app.config.get("SMTP_PORT", 587) or 587)
+    smtp_port = int(app.config.get("SMTP_PORT", 0) or 0)
     smtp_user = app.config.get("SMTP_USERNAME")
     smtp_pass = app.config.get("SMTP_PASSWORD")
     from_addr = app.config.get("MAIL_FROM") or smtp_user or "no-reply@example.com"
@@ -67,29 +70,62 @@ def send_email(to_email: str, subject: str, body: str):
     msg["From"] = from_addr
     msg["To"] = to_email or ""
 
+    # If SMTP server or username missing, print to console for dev
     if not smtp_server or not smtp_user:
-        # fallback for dev — print OTP or link
         app.logger.info("SMTP not configured; printing email to console")
         print("=== EMAIL OUT ===")
         print("To:", to_email)
         print("Subject:", subject)
         print(body)
         print("=================")
-        return
+        return True
 
+    server = None
     try:
-        server = smtplib.SMTP(smtp_server, smtp_port, timeout=10)
-        server.starttls()
+        app.logger.info("Attempting to send email via SMTP server %s:%s as %s", smtp_server, smtp_port or "(default)", smtp_user)
+
+        # Choose SSL vs STARTTLS
+        if smtp_port == 465:
+            server = smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=15)
+        else:
+            # default to normal SMTP then upgrade to TLS (works for 587)
+            server = smtplib.SMTP(smtp_server, smtp_port or 587, timeout=15)
+            server.ehlo()
+            try:
+                server.starttls()
+                server.ehlo()
+            except Exception:
+                app.logger.debug("starttls not supported or failed; continuing without TLS", exc_info=True)
+
+        # Login if credentials supplied
         if smtp_user and smtp_pass:
             server.login(smtp_user, smtp_pass)
+
         server.sendmail(from_addr, [to_email], msg.as_string())
-    except Exception:
-        app.logger.exception("Failed to send email")
+        app.logger.info("Email sent to %s", to_email)
+        return True
+    except smtplib.SMTPAuthenticationError as ex:
+        app.logger.error("SMTP auth failed: %s", ex)
+    except smtplib.SMTPException as ex:
+        app.logger.exception("SMTP error sending email: %s", ex)
+    except Exception as ex:
+        app.logger.exception("Unexpected error sending email: %s", ex)
     finally:
         try:
-            server.quit()
+            if server:
+                server.quit()
         except Exception:
             pass
+
+    # On failure, print the OTP to console as a last resort (still helpful for dev)
+    app.logger.warning("Falling back to printing email to console because sending failed")
+    print("=== EMAIL OUT (fallback) ===")
+    print("To:", to_email)
+    print("Subject:", subject)
+    print(body)
+    print("============================")
+    return False
+
 
 # Notification helper (Mongo)
 def create_notification(message: str, ntype: str = "info", data: dict = None, is_read: bool = False):
@@ -109,6 +145,59 @@ def create_notification(message: str, ntype: str = "info", data: dict = None, is
         mongo.db.notifications.insert_one(doc)
     except Exception:
         app.logger.exception("Failed to create notification")
+
+
+def create_notification_once(message: str, ntype: str = "info", data: dict = None, is_read: bool = False, dedupe_window_seconds: int = 5):
+    """
+    Insert notification only if a similar one wasn't created in the last `dedupe_window_seconds`.
+    Similarity: same type and matching identifying keys in `data` (item_id, performed_by, quantity).
+    Returns the inserted result or existing doc if skipped.
+    """
+    try:
+        now = datetime.utcnow()
+        data = data or {}
+
+        # Build filter for similar recent notifications
+        nf = {
+            "type": ntype,
+            "created_at": {"$gte": now - timedelta(seconds=dedupe_window_seconds)}
+        }
+
+        # If data contains item_id/performed_by/quantity, include for stronger match
+        # We store nested fields inside data in mongodb as "data.item_id" etc.
+        if "item_id" in data:
+            nf["data.item_id"] = data["item_id"]
+        if "performed_by" in data:
+            nf["data.performed_by"] = data["performed_by"]
+        # match either "quantity" or "qty" in data to be safe
+        if "quantity" in data:
+            nf["data.quantity"] = data["quantity"]
+        elif "qty" in data:
+            nf["data.qty"] = data["qty"]
+
+        existing = mongo.db.notifications.find_one(nf)
+        if existing:
+            app.logger.debug("Skipping duplicate notification (recent similar exists): %s", nf)
+            return existing
+
+        doc = {
+            "message": message,
+            "type": ntype,
+            "data": data,
+            "created_at": now,
+            "is_read": bool(is_read)
+        }
+        res = mongo.db.notifications.insert_one(doc)
+        return res
+    except Exception:
+        app.logger.exception("Failed to create (deduped) notification")
+        # fallback to non-dedupe create
+        try:
+            create_notification(message, ntype, data, is_read)
+        except Exception:
+            pass
+        return None
+
 
 def get_current_user():
     uid = session.get("user_id")
@@ -755,25 +844,44 @@ def api_transaction():
         # fetch updated item quantity
         new_qty = int(updated.get("quantity", 0))
 
-        # create transaction notification
+        # create transaction notification (deduped)
         uname = session.get("username", "unknown")
-        create_notification(f"{uname} performed '{t_type}' on '{item.get('name')}' (qty {qty})", "transaction", {
-            "item_id": item_id,
-            "previous_qty": prev_qty,
-            "new_qty": new_qty,
-            "performed_by": uname
-        })
+        create_notification_once(
+            f"{uname} performed '{t_type}' on '{item.get('name')}' (qty {qty})",
+            "transaction",
+            {
+                "item_id": item_id,
+                "previous_qty": prev_qty,
+                "new_qty": new_qty,
+                "performed_by": uname,
+                "quantity": qty
+            },
+            is_read=False,
+            dedupe_window_seconds=5
+        )
 
         # create low-stock notification if threshold crossed (only when new_qty <= threshold and prev_qty > threshold)
         if new_qty <= low_threshold and prev_qty > low_threshold:
-            create_notification(f"Low stock: '{item.get('name')}' is at {new_qty} units", "low_stock", {
-                "item_id": item_id,
-                "qty": new_qty
-            })
+            create_notification_once(
+                f"Low stock: '{item.get('name')}' is at {new_qty} units",
+                "low_stock",
+                {
+                    "item_id": item_id,
+                    "qty": new_qty
+                },
+                is_read=False,
+                dedupe_window_seconds=5
+            )
 
         # for restock_request, create a separate notification
         if t_type == "restock_request":
-            create_notification(f"Restock request: '{item.get('name')}' requested by {uname} (qty {qty})", "restock_request", {"item_id": item_id})
+            create_notification_once(
+                f"Restock request: '{item.get('name')}' requested by {uname} (qty {qty})",
+                "restock_request",
+                {"item_id": item_id, "requested_by": uname, "quantity": qty},
+                is_read=False,
+                dedupe_window_seconds=5
+            )
 
         return jsonify({"ok": True, "new_quantity": new_qty})
     except Exception:
@@ -1055,13 +1163,13 @@ def export_transactions_pdf():
 
     table = Table(data, colWidths=table_col_widths, repeatRows=1)
 
-    # style similar to inventory report
+    # style similar to inventory report (header dark + white text)
     tbl = TableStyle([
         ('FONTNAME', (0,0), (-1,-1), font_name),
         ('FONTSIZE', (0,0), (-1,-1), 9),
 
-        # header uses same color as inventory report
-        ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#d4dfea")),
+        # header uses same dark color as inventory report
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#2c3e50")),
         ('TEXTCOLOR', (0,0), (-1,0), colors.white),
 
         ('ALIGN', (0,0), (0,-1), 'CENTER'),
