@@ -29,13 +29,13 @@ name_to_id = {
 
 # Seed items
 items = [
-    {"name": "DELL PC", "category_id": name_to_id["Computers"], "category_name": "Computers", "quantity": 45, "price": 89.99, "low_stock_threshold": 5},
-    {"name": "DELL Mouse", "category_id": name_to_id["Mouse"], "category_name": "Mouse", "quantity": 5, "price": 34.50, "low_stock_threshold": 5},
-    {"name": "LG keyboard", "category_id": name_to_id["Keyboards"], "category_name": "Keyboards", "quantity": 0, "price": 75.00, "low_stock_threshold": 3},
-    {"name": "LG", "category_id": name_to_id["CPU"], "category_name": "CPU", "quantity": 120, "price": 12.99, "low_stock_threshold": 10},
-    {"name": "DELL Mouse", "category_id": name_to_id["Mouse"], "category_name": "Mouse", "quantity": 15, "price": 8.50, "low_stock_threshold": 5},
-    {"name": "LG PC", "category_id": name_to_id["Computers"], "category_name": "Computers", "quantity": 32, "price": 45.00, "low_stock_threshold": 5},
-    {"name": "DELL keyboard", "category_id": name_to_id["Keyboards"], "category_name": "Keyboards", "quantity": 8, "price": 125.00, "low_stock_threshold": 5},
+    {"name": "DELL PC", "category_id": name_to_id["Computers"], "category_name": "Computers", "quantity": 45, "price": 8999.99, "low_stock_threshold": 5},
+    {"name": "DELL Mouse", "category_id": name_to_id["Mouse"], "category_name": "Mouse", "quantity": 5, "price": 3445.50, "low_stock_threshold": 5},
+    {"name": "LG keyboard", "category_id": name_to_id["Keyboards"], "category_name": "Keyboards", "quantity": 0, "price": 7500.00, "low_stock_threshold": 3},
+    {"name": "LG", "category_id": name_to_id["CPU"], "category_name": "CPU", "quantity": 120, "price": 12000.99, "low_stock_threshold": 10},
+    {"name": "DELL Mouse", "category_id": name_to_id["Mouse"], "category_name": "Mouse", "quantity": 15, "price": 800.50, "low_stock_threshold": 5},
+    {"name": "LG PC", "category_id": name_to_id["Computers"], "category_name": "Computers", "quantity": 32, "price": 45000.00, "low_stock_threshold": 5},
+    {"name": "DELL keyboard", "category_id": name_to_id["Keyboards"], "category_name": "Keyboards", "quantity": 8, "price": 12500.00, "low_stock_threshold": 5},
 ]
 db.items.insert_many(items)
 

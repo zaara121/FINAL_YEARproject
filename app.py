@@ -23,6 +23,10 @@ import os
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 import json
+from pymongo import ReturnDocument
+from reportlab.lib.pagesizes import letter, landscape
+from reportlab.lib.styles import ParagraphStyle
+from reportlab.platypus import Paragraph
 
 app = Flask(__name__)
 app.config.from_object(Config)
@@ -30,9 +34,26 @@ app.config.from_object(Config)
 mongo = PyMongo(app)
 bcrypt = Bcrypt(app)
 
-# -----------------------
+# Safe idempotency index creation
+try:
+    # Remove explicit null idempotency_key (these break unique indexes)
+    mongo.db.transactions.update_many(
+        {"idempotency_key": None},
+        {"$unset": {"idempotency_key": ""}}
+    )
+
+    # Unique index only when idempotency_key exists and is not null
+    mongo.db.transactions.create_index(
+        [("user_id", 1), ("idempotency_key", 1)],
+        unique=True,
+        name="user_id_idempotency_key_unique",
+        partialFilterExpression={"idempotency_key": {"$exists": True, "$ne": None}}
+    )
+except Exception:
+    app.logger.exception("Could not create idempotency index on transactions (non-fatal)")
+
+
 # Email helper (OTP / reset)
-# -----------------------
 def send_email(to_email: str, subject: str, body: str):
     """Send email via SMTP configured in app.config or print link/OTP to stdout for dev."""
     smtp_server = app.config.get("SMTP_SERVER")
@@ -70,9 +91,7 @@ def send_email(to_email: str, subject: str, body: str):
         except Exception:
             pass
 
-# -----------------------
 # Notification helper (Mongo)
-# -----------------------
 def create_notification(message: str, ntype: str = "info", data: dict = None, is_read: bool = False):
     """
     Inserts a notification doc into mongo.db.notifications
@@ -91,9 +110,6 @@ def create_notification(message: str, ntype: str = "info", data: dict = None, is
     except Exception:
         app.logger.exception("Failed to create notification")
 
-# -----------------------
-# Helpers
-# -----------------------
 def get_current_user():
     uid = session.get("user_id")
     if not uid:
@@ -103,9 +119,7 @@ def get_current_user():
     except Exception:
         return None
 
-# -----------------------
 # Authentication & Registration
-# -----------------------
 @app.route("/", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
@@ -339,23 +353,68 @@ def admin_dashboard():
             "category_name": it.get("category_name", "")
         })
 
-    # Notifications: last 5 transactions done by staff
+    # ----------------------------
+    # Notifications: last 5 transactions (resolve user & item names)
+    # ----------------------------
     transaction_docs = list(
-        mongo.db.transactions.find({"staff_name": {"$exists": True}})
-        .sort("timestamp", -1)
-        .limit(5)
+        mongo.db.transactions.find({}).sort("created_at", -1).limit(5)
     )
+
     notifications = []
     for t in transaction_docs:
+        # resolve staff username
+        staff_name = "Staff"
+        try:
+            uid = t.get("user_id")
+            if isinstance(uid, ObjectId):
+                u = mongo.db.users.find_one({"_id": uid})
+                if u:
+                    staff_name = u.get("username", "Staff")
+            else:
+                # maybe stored as string
+                try:
+                    u = mongo.db.users.find_one({"_id": ObjectId(uid)}) if uid else None
+                    if u:
+                        staff_name = u.get("username", "Staff")
+                except Exception:
+                    staff_name = t.get("performed_by") or t.get("staff_name") or "Staff"
+        except Exception:
+            staff_name = t.get("performed_by") or t.get("staff_name") or "Staff"
+
+        # resolve item name
+        item_name = t.get("item_name") or ""
+        try:
+            iid = t.get("item_id")
+            if isinstance(iid, ObjectId):
+                it = mongo.db.items.find_one({"_id": iid})
+                if it:
+                    item_name = it.get("name", item_name)
+            else:
+                try:
+                    it = mongo.db.items.find_one({"_id": ObjectId(iid)}) if iid else None
+                    if it:
+                        item_name = it.get("name", item_name)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        notif_type = t.get("type", "transaction")
+        qty = t.get("quantity", 0)
+        created = t.get("created_at", datetime.utcnow())
         notifications.append({
-            "staff_name": t.get("staff_name", "Staff"),
-            "action": t.get("type", "performed a transaction"),  # e.g., issue/return/restock_request
-            "item_name": t.get("item_name", "Unknown item"),
-            "quantity": t.get("quantity", 0),
-            "timestamp": t.get("timestamp", datetime.utcnow())
+            "staff_name": staff_name,
+            "action": notif_type,
+            "item_name": item_name or "Unknown item",
+            "quantity": qty,
+            "timestamp": created
         })
 
-    unread_notifications = len(notifications)
+    # unread notifications count from notifications collection
+    try:
+        unread_notifications = mongo.db.notifications.count_documents({"is_read": False})
+    except Exception:
+        unread_notifications = 0
 
     return render_template(
         "admin_dashboard.html",
@@ -398,6 +457,13 @@ def staff_dashboard():
             "category_name": it.get("category_name", "")
         })
 
+    # generate a short idempotency key to be used by the client for transaction requests
+    tx_key = secrets.token_hex(16)
+    try:
+        session["_last_tx_key"] = tx_key
+    except Exception:
+        app.logger.exception("Could not write tx_key to session (non-fatal)")
+
     return render_template(
         "staff_dashboard.html",
         total_items=total_items,
@@ -406,7 +472,8 @@ def staff_dashboard():
         categories=categories,
         items=view_items,
         restock_requests=restock_requests,
-        category_names=category_names
+        category_names=category_names,
+        tx_key=tx_key
     )
 
 # --- ADD ITEM (Admin only) ---
@@ -587,7 +654,6 @@ def api_items():
         })
     return jsonify(data)
 
-
 @app.route("/api/transaction", methods=["POST"])
 def api_transaction():
     if "user_id" not in session:
@@ -601,9 +667,32 @@ def api_transaction():
     except Exception:
         qty = 0
     recipient = payload.get("recipient")
+    idemp_key = payload.get("idempotency_key") or payload.get("idempotencyKey")
 
     if not item_id:
         return jsonify({"error": "item_id is required"}), 400
+
+    # If idempotency key provided, check whether we've already processed it for this user:
+    if idemp_key:
+        try:
+            existing = mongo.db.transactions.find_one({"user_id": ObjectId(session["user_id"]), "idempotency_key": idemp_key})
+            if existing:
+                # Already processed: return current quantity (safe) and mark ok
+                try:
+                    oid_temp = ObjectId(item_id)
+                    updated_item = mongo.db.items.find_one({"_id": oid_temp})
+                    new_qty_safe = int(updated_item.get("quantity", 0)) if updated_item else None
+                except Exception:
+                    new_qty_safe = None
+                return jsonify({"ok": True, "new_quantity": new_qty_safe, "idempotent": True})
+        except Exception:
+            app.logger.exception("Idempotency lookup failed; continuing processing")
+
+    # store fingerprint & timestamp to session as a fallback dedupe
+    try:
+        session["_last_tx"] = {"fp": {"item_id": item_id, "type": t_type, "quantity": qty}, "ts": datetime.utcnow().isoformat()}
+    except Exception:
+        app.logger.exception("Could not write session _last_tx (non-fatal)")
 
     try:
         oid = ObjectId(item_id)
@@ -617,51 +706,79 @@ def api_transaction():
     prev_qty = int(item.get("quantity", 0))
     low_threshold = int(item.get("low_stock_threshold", 5))
 
-    if t_type == "issue":
-        if prev_qty < qty:
-            return jsonify({"error": "not enough stock"}), 400
-        mongo.db.items.update_one({"_id": oid}, {"$inc": {"quantity": -qty}})
-    elif t_type == "return":
-        mongo.db.items.update_one({"_id": oid}, {"$inc": {"quantity": qty}})
-    elif t_type == "restock_request":
-        # no quantity change, just a request record - you might want to notify admins
-        pass
+    # Perform atomic update depending on transaction type
+    try:
+        if t_type == "issue":
+            if qty <= 0:
+                return jsonify({"error": "quantity must be > 0"}), 400
+            updated = mongo.db.items.find_one_and_update(
+                {"_id": oid, "quantity": {"$gte": qty}},
+                {"$inc": {"quantity": -qty}},
+                return_document=ReturnDocument.AFTER
+            )
+            if not updated:
+                return jsonify({"error": "not enough stock"}), 400
+        elif t_type == "return":
+            if qty <= 0:
+                return jsonify({"error": "quantity must be > 0"}), 400
+            updated = mongo.db.items.find_one_and_update(
+                {"_id": oid},
+                {"$inc": {"quantity": qty}},
+                return_document=ReturnDocument.AFTER
+            )
+        elif t_type == "restock_request":
+            # no quantity change
+            updated = mongo.db.items.find_one({"_id": oid})
+        else:
+            return jsonify({"error": "invalid transaction type"}), 400
 
-    # insert transaction record
-    mongo.db.transactions.insert_one({
-        "item_id": oid,
-        "user_id": ObjectId(session["user_id"]),
-        "type": t_type,
-        "quantity": qty,
-        "recipient_name": recipient,
-        "created_at": datetime.utcnow(),
-    })
+        # prepare transaction doc (include idempotency key if present)
+        tx_doc = {
+            "item_id": oid,
+            "user_id": ObjectId(session["user_id"]),
+            "type": t_type,
+            "quantity": qty,
+            "recipient_name": recipient,
+            "created_at": datetime.utcnow()
+        }
+        if idemp_key:
+            tx_doc["idempotency_key"] = idemp_key
 
-    # fetch updated item quantity
-    updated_item = mongo.db.items.find_one({"_id": oid})
-    new_qty = int(updated_item.get("quantity", 0))
+        # Try insert. If idempotency unique index causes duplicate error, treat as already-processed.
+        try:
+            mongo.db.transactions.insert_one(tx_doc)
+        except Exception as e:
+            app.logger.warning("Transaction insert error (possible duplicate idempotency key): %s", e)
+            updated_item = mongo.db.items.find_one({"_id": oid})
+            return jsonify({"ok": True, "new_quantity": int(updated_item.get("quantity", 0))})
 
-    # create transaction notification
-    uname = session.get("username", "unknown")
-    create_notification(f"{uname} performed '{t_type}' on '{item.get('name')}' (qty {qty})", "transaction", {
-        "item_id": item_id,
-        "previous_qty": prev_qty,
-        "new_qty": new_qty,
-        "performed_by": uname
-    })
+        # fetch updated item quantity
+        new_qty = int(updated.get("quantity", 0))
 
-    # create low-stock notification if threshold crossed (only when new_qty <= threshold and prev_qty > threshold)
-    if new_qty <= low_threshold and prev_qty > low_threshold:
-        create_notification(f"Low stock: '{item.get('name')}' is at {new_qty} units", "low_stock", {
+        # create transaction notification
+        uname = session.get("username", "unknown")
+        create_notification(f"{uname} performed '{t_type}' on '{item.get('name')}' (qty {qty})", "transaction", {
             "item_id": item_id,
-            "qty": new_qty
+            "previous_qty": prev_qty,
+            "new_qty": new_qty,
+            "performed_by": uname
         })
 
-    # for restock_request, create a separate notification
-    if t_type == "restock_request":
-        create_notification(f"Restock request: '{item.get('name')}' requested by {uname} (qty {qty})", "restock_request", {"item_id": item_id})
+        # create low-stock notification if threshold crossed (only when new_qty <= threshold and prev_qty > threshold)
+        if new_qty <= low_threshold and prev_qty > low_threshold:
+            create_notification(f"Low stock: '{item.get('name')}' is at {new_qty} units", "low_stock", {
+                "item_id": item_id,
+                "qty": new_qty
+            })
 
-    return jsonify({"ok": True})
+        # for restock_request, create a separate notification
+        if t_type == "restock_request":
+            create_notification(f"Restock request: '{item.get('name')}' requested by {uname} (qty {qty})", "restock_request", {"item_id": item_id})
+
+        return jsonify({"ok": True, "new_quantity": new_qty})
+    except Exception:
+        app.logger.exception("Transaction processing failed")
+        return jsonify({"error": "internal error"}), 500
 
 # --- Notifications API ---
 @app.route("/api/notifications", methods=["GET"])
@@ -823,6 +940,154 @@ def export_inventory_pdf():
 
     buffer.seek(0)
     return send_file(buffer, as_attachment=True, download_name="inventory.pdf", mimetype="application/pdf")
+
+
+@app.route("/admin/export/transactions")
+def export_transactions_pdf():
+    if session.get("role") != "admin":
+        return redirect(url_for("login"))
+
+    txs = list(mongo.db.transactions.find({}).sort("created_at", -1).limit(2000))
+    buffer = io.BytesIO()
+
+    static_font_path = os.path.join(app.root_path, "static", "DejaVuSans.ttf")
+    font_name = "Helvetica"
+    if os.path.exists(static_font_path):
+        try:
+            pdfmetrics.registerFont(TTFont("DejaVuSans", static_font_path))
+            font_name = "DejaVuSans"
+        except Exception:
+            app.logger.exception("Could not load DejaVuSans.ttf — falling back to Helvetica")
+
+    # Use landscape for more horizontal space
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=landscape(letter),
+        leftMargin=30, rightMargin=30,
+        topMargin=30, bottomMargin=30
+    )
+
+    styles = getSampleStyleSheet()
+    story = []
+
+    title_style = styles["Heading1"]
+    title_style.fontName = font_name
+    title_style.fontSize = 16
+    story.append(Paragraph("Transactions Report - SmartStore DIEMS", title_style))
+    story.append(Spacer(1, 6))
+
+    meta_style = styles["Normal"]
+    meta_style.fontName = font_name
+    meta_style.fontSize = 9
+    story.append(Paragraph(f"Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}", meta_style))
+    story.append(Spacer(1, 8))
+
+    # small paragraph style for table cells
+    cell_style = ParagraphStyle(
+        name="cell",
+        fontName=font_name,
+        fontSize=9,
+        leading=11,
+        allowWidows=True,
+        allowOrphans=True,
+    )
+
+    # header row (use Paragraph to keep font consistent)
+    data = [[
+        Paragraph("<b>S/N</b>", cell_style),
+        Paragraph("<b>Timestamp</b>", cell_style),
+        Paragraph("<b>Staff</b>", cell_style),
+        Paragraph("<b>Type</b>", cell_style),
+        Paragraph("<b>Item</b>", cell_style),
+        Paragraph("<b>Qty</b>", cell_style),
+        Paragraph("<b>Recipient</b>", cell_style),
+    ]]
+
+    # fill rows
+    for idx, tx in enumerate(txs, start=1):
+        ts = tx.get("created_at")
+        ts_str = ts.strftime("%Y-%m-%d %H:%M") if isinstance(ts, datetime) else str(ts)
+
+        # resolve item name
+        item_name = ""
+        try:
+            if tx.get("item_id"):
+                item_doc = mongo.db.items.find_one({"_id": tx.get("item_id")})
+                if item_doc:
+                    item_name = item_doc.get("name", "")
+        except Exception:
+            item_name = tx.get("item_name") or ""
+
+        # resolve staff name
+        staff_name = ""
+        try:
+            if tx.get("user_id"):
+                user_doc = mongo.db.users.find_one({"_id": tx.get("user_id")})
+                if user_doc:
+                    staff_name = user_doc.get("username", "")
+        except Exception:
+            staff_name = tx.get("performed_by") or ""
+
+        tx_type = tx.get("type", "") or "-"
+        qty = tx.get("quantity", 0)
+        recipient = tx.get("recipient_name", "") or "-"
+
+        data.append([
+            Paragraph(str(idx), cell_style),
+            Paragraph(ts_str, cell_style),
+            Paragraph(staff_name or "-", cell_style),
+            Paragraph(tx_type, cell_style),
+            Paragraph(item_name or "-", cell_style),
+            Paragraph(str(qty), cell_style),
+            Paragraph(recipient, cell_style),
+        ])
+
+    # column widths (7 columns) - tuned for landscape page
+    table_col_widths = [
+        12 * mm,   # S/N
+        36 * mm,   # Timestamp
+        36 * mm,   # Staff
+        28 * mm,   # Type
+        120 * mm,  # Item (wide)
+        15 * mm,   # Qty
+        35 * mm,   # Recipient
+    ]
+
+    table = Table(data, colWidths=table_col_widths, repeatRows=1)
+
+    # style similar to inventory report
+    tbl = TableStyle([
+        ('FONTNAME', (0,0), (-1,-1), font_name),
+        ('FONTSIZE', (0,0), (-1,-1), 9),
+
+        # header uses same color as inventory report
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#d4dfea")),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+
+        ('ALIGN', (0,0), (0,-1), 'CENTER'),
+        ('ALIGN', (5,0), (5,-1), 'CENTER'),
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ('GRID', (0,0), (-1,-1), 0.25, colors.grey),
+
+        ('BOTTOMPADDING', (0,0), (-1,0), 8),
+        ('TOPPADDING', (0,0), (-1,0), 8),
+    ])
+
+    # alternating row backgrounds (light stripe like inventory)
+    for r in range(1, len(data)):
+        if r % 2 == 0:
+            tbl.add('BACKGROUND', (0, r), (-1, r), colors.HexColor("#fafbfc"))
+
+    table.setStyle(tbl)
+
+    story.append(table)
+    story.append(Spacer(1, 12))
+
+    doc.build(story)
+    buffer.seek(0)
+    return send_file(buffer, as_attachment=True, download_name="transactions.pdf", mimetype="application/pdf")
+
+
 
 if __name__ == "__main__":
     app.secret_key = app.config.get("SECRET_KEY", "dev-secret")

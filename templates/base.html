@@ -7,84 +7,165 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css">
     <link rel="stylesheet" href="/static/css/styles.css">
   </head>
+
   <body>
     <nav class="navbar navbar-expand-lg navbar-primary bg-primary text-white">
       <div class="container-fluid">
+
+        <!-- Logo -->
         <a class="navbar-brand text-white" href="#">
           <span class="logo-box">📦</span>
           <span class="ms-2">SmartStore DIEMS</span>
         </a>
 
         <div class="d-flex align-items-center">
+
           {% if session.get('username') %}
+
+            <!-- Username + Role -->
             <div class="me-3">
-              {{ session.get('username') }} 
+              {{ session.get('username') }}
               <span class="badge bg-light text-dark">{{ session.get('role') }}</span>
             </div>
 
             {% if session.get('role') == 'admin' %}
-              <!-- Admin Notification Bell -->
-              <div class="dropdown me-3">
-                <button class="btn btn-outline-light position-relative" type="button" id="notifDropdown" data-bs-toggle="dropdown" aria-expanded="false">
-                  🔔
-                  {% set unread_count = unread_notifications if unread_notifications is defined else 0 %}
-                  {% if unread_count > 0 %}
-                    <span class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger">
-                      {{ unread_count }}
-                    </span>
-                  {% endif %}
-                </button>
+            <!-- ========================= -->
+            <!-- ADMIN NOTIFICATION BELL -->
+            <!-- ========================= -->
+            <div class="dropdown me-3">
+              <button class="btn btn-outline-light position-relative" type="button"
+                      id="notifDropdown" data-bs-toggle="dropdown" aria-expanded="false">
+                🔔
 
-                <ul class="dropdown-menu dropdown-menu-end p-2" aria-labelledby="notifDropdown" style="min-width: 300px; max-height: 300px; overflow-y: auto;">
-                  {% set notifications_list = notifications if notifications is defined else [] %}
-                  {% if notifications_list %}
-                    {% for notif in notifications_list %}
-                      <li class="mb-2 border-bottom pb-2">
-                        <div>
-                          <strong>{{ notif.staff_name }}</strong> 
-                          {{ notif.action|replace('_',' ') }} 
-                          <strong>{{ notif.item_name }}</strong> ({{ notif.quantity }})
-                        </div>
-                        <small class="text-muted">
-                          {{ notif.timestamp.strftime('%Y-%m-%d %H:%M') if notif.timestamp else '' }}
-                        </small>
-                      </li>
-                    {% endfor %}
-                  {% else %}
-                    <li class="text-center text-muted">No new notifications</li>
-                  {% endif %}
-                </ul>
-              </div>
+                {% set navbar_unread = navbar_unread_notifications
+                                         if navbar_unread_notifications is defined
+                                         else (unread_notifications if unread_notifications is defined else 0) %}
+
+                <span id="navbarNotifBadge"
+                      class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger
+                      {% if navbar_unread <= 0 %}d-none{% endif %}">
+                  {{ navbar_unread }}
+                </span>
+              </button>
+
+              <!-- Dropdown list -->
+              <ul class="dropdown-menu dropdown-menu-end p-2"
+                  aria-labelledby="notifDropdown"
+                  style="min-width: 320px; max-height: 360px; overflow-y: auto;">
+
+                <div class="d-flex justify-content-between align-items-center mb-2 px-2">
+                  <strong>Recent activity</strong>
+                  <button id="navbarMarkAllBtn" class="btn btn-sm btn-link">Mark all read</button>
+                </div>
+
+                {% set navbar_list = navbar_notifications
+                                     if navbar_notifications is defined
+                                     else (notifications if notifications is defined else []) %}
+
+                {% if navbar_list %}
+                  {% for notif in navbar_list %}
+                    <li class="mb-2 border-bottom pb-2 px-2">
+                      <div>
+                        <strong>{{ notif.staff_name }}</strong>
+                        {{ notif.action|default('')|replace('_',' ') }}
+                        <strong>{{ notif.item_name }}</strong>
+                        (<span class="text-muted">{{ notif.quantity }}</span>)
+                      </div>
+                      <small class="text-muted">
+                        {{ notif.timestamp.strftime('%Y-%m-%d %H:%M') if notif.timestamp else '' }}
+                      </small>
+                    </li>
+                  {% endfor %}
+                {% else %}
+                  <li class="text-center text-muted small px-2">No new notifications</li>
+                {% endif %}
+              </ul>
+            </div>
             {% endif %}
 
+            <!-- Logout Button -->
             <a class="btn btn-outline-light" href="{{ url_for('logout') }}">Logout</a>
+
           {% endif %}
         </div>
       </div>
     </nav>
 
+    <!-- MAIN PAGE CONTENT -->
     <div class="container my-4">
       {% block content %}{% endblock %}
     </div>
 
+    <!-- FOOTER -->
+    <footer class="bg-light text-center text-lg-start mt-auto py-3">
+      <div class="text-center p-3">
+        © 2025 SmartStore DIEMS
+      </div>
+    </footer>
+
+    <!-- SCRIPTS -->
     <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script src="/static/js/main.js"></script>
 
     <script>
-      function markNotificationsRead() {
-        fetch("/mark_notifications_read")
-          .then(() => {
-            const badge = document.querySelector('#notifDropdown .badge');
-            if (badge) badge.remove();
+      // MARK ALL READ
+      async function markNotificationsRead() {
+        try {
+          const res = await fetch("/api/notifications/mark_read", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id: "all" })
           });
-      }
-    </script>
-  </body>
 
-  <footer class="bg-light text-center text-lg-start mt-auto py-3">
-    <div class="text-center p-3">
-      © 2025 SmartStore DIEMS
-    </div>
-  </footer>
+          const j = await res.json();
+          if (res.ok && j.ok) {
+            const badge = document.getElementById('navbarNotifBadge');
+            if (badge) badge.classList.add('d-none');
+          }
+        } catch (err) {
+          console.error("Error marking notifications read", err);
+        }
+      }
+
+      document.addEventListener("DOMContentLoaded", function () {
+
+        const markBtn = document.getElementById("navbarMarkAllBtn");
+        if (markBtn) {
+          markBtn.addEventListener("click", function () {
+            markBtn.disabled = true;
+            markNotificationsRead().finally(() => {
+              setTimeout(() => { markBtn.disabled = false; }, 800);
+            });
+          });
+        }
+
+        // AUTO REFRESH (30 seconds)
+        async function refreshUnreadCount() {
+          try {
+            const res = await fetch("/api/notifications");
+            if (!res.ok) return;
+
+            const j = await res.json();
+            const count = j.unread || 0;
+
+            const badge = document.getElementById("navbarNotifBadge");
+            if (!badge) return;
+
+            if (count > 0) {
+              badge.textContent = count;
+              badge.classList.remove("d-none");
+            } else {
+              badge.classList.add("d-none");
+            }
+          } catch {}
+        }
+
+        refreshUnreadCount();
+        setInterval(refreshUnreadCount, 30000);
+
+      });
+    </script>
+
+  </body>
 </html>

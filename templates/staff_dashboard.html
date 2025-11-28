@@ -124,7 +124,8 @@
         </div>
       </div>
 
-      <button id="recordTx" class="btn btn-primary w-100">Record Transaction</button>
+      <!-- Ensure it's not a form submit button -->
+      <button id="recordTx" type="button" class="btn btn-primary w-100">Record Transaction</button>
       <div id="txMsg" class="mt-2"></div>
     </div>
   </div>
@@ -136,6 +137,9 @@ document.addEventListener('DOMContentLoaded', function () {
   const categoryFilter = document.getElementById('categoryFilter');
   const inventoryBody = document.getElementById('inventoryBody');
   const txItemSelect = document.getElementById('txItem');
+
+  // server-provided idempotency key (injected from app.py as tx_key)
+  const IDEMPOTENCY_KEY = "{{ tx_key|e }}";
 
   async function fetchAndRender() {
     const q = encodeURIComponent(searchInput.value || '');
@@ -182,32 +186,58 @@ document.addEventListener('DOMContentLoaded', function () {
     };
   }
 
-  // Attach transaction button (existing code expects #recordTx handler in main.js)
-  // but we keep a local handler as fallback:
-  const recordBtn = document.getElementById('recordTx');
-  recordBtn.addEventListener('click', async function(){
-    const payload = {
-      item_id: txItemSelect.value,
-      type: document.getElementById('txType').value,
-      quantity: document.getElementById('txQty').value,
-      recipient: document.getElementById('txRecipient').value
-    };
-    const res = await fetch('/api/transaction', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify(payload)
-    });
-    const j = await res.json();
-    const msgBox = document.getElementById('txMsg');
-    if (res.ok && j.ok) {
-      msgBox.innerHTML = '<div class="alert alert-success">Transaction recorded</div>';
-      // refresh inventory table
-      fetchAndRender();
-    } else {
-      msgBox.innerHTML = `<div class="alert alert-danger">${j.error || 'Error'}</div>`;
-    }
-  });
+  // ====== Replace-and-attach strategy to remove any existing listeners and attach exactly one ======
+  (function attachSingleHandler(){
+    const recordBtn = document.getElementById('recordTx');
+    if (!recordBtn) return;
 
+    // Replace button with a clone to remove any previously attached listeners (both inline and via addEventListener)
+    const cleanBtn = recordBtn.cloneNode(true);
+    recordBtn.parentNode.replaceChild(cleanBtn, recordBtn);
+
+    // now attach a single guarded listener to the clean button
+    cleanBtn.addEventListener('click', async function (e) {
+      // basic input validation + guard against double processing
+      if (cleanBtn.dataset.processing === '1') return;
+      cleanBtn.dataset.processing = '1';
+      cleanBtn.disabled = true;
+
+      const qtyRaw = document.getElementById('txQty').value;
+      const payload = {
+        item_id: txItemSelect.value,
+        type: document.getElementById('txType').value,
+        quantity: parseInt(qtyRaw, 10) || 0,
+        recipient: document.getElementById('txRecipient').value,
+        idempotency_key: IDEMPOTENCY_KEY
+      };
+
+      const msgBox = document.getElementById('txMsg');
+      msgBox.innerHTML = '';
+
+      try {
+        const res = await fetch('/api/transaction', {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify(payload)
+        });
+        const j = await res.json();
+
+        if (res.ok && j.ok) {
+          msgBox.innerHTML = '<div class="alert alert-success">Transaction recorded</div>';
+          // refresh inventory table
+          fetchAndRender();
+        } else {
+          msgBox.innerHTML = `<div class="alert alert-danger">${j.error || 'Error'}</div>`;
+        }
+      } catch (err) {
+        console.error('Transaction failed', err);
+        msgBox.innerHTML = '<div class="alert alert-danger">Network error</div>';
+      } finally {
+        cleanBtn.dataset.processing = '0';
+        cleanBtn.disabled = false;
+      }
+    });
+  })();
 });
 </script>
 {% endblock %}

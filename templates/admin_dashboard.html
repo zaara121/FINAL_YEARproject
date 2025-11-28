@@ -8,8 +8,13 @@
   </div>
 
   <div class="d-flex align-items-center">
-    <a class="btn btn-primary" href="{{ url_for('export_inventory_pdf') }}">
+    <a class="btn btn-primary me-2" href="{{ url_for('export_inventory_pdf') }}">
       Download Inventory PDF
+    </a>
+
+    <!-- New: Transactions PDF button placed beside Inventory PDF -->
+    <a class="btn btn-secondary" href="{{ url_for('export_transactions_pdf') }}">
+      Download Transactions PDF
     </a>
   </div>
 </div>
@@ -144,7 +149,7 @@
   </table>
 </div>
 
-<!-- JS for toggles -->
+<!-- JS for toggles (kept minimal) -->
 <script>
   document.addEventListener('DOMContentLoaded', function () {
     const btn = document.getElementById('showAddForm');
